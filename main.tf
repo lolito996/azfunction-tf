@@ -18,12 +18,20 @@ terraform {
 
 provider "azurerm" {
   features {}
-  subscription_id = "403f7746-fa08-44b9-bf1b-63d2cacef9f1"
+  # subscription_id should be set via environment variable or Azure CLI
+  # subscription_id = var.subscription_id
 }
 
 resource "azurerm_resource_group" "rg" {
   name     = var.name_function
   location = var.location
+  
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
+  }
 }
 
 resource "azurerm_storage_account" "sa" {
@@ -118,6 +126,7 @@ resource "azurerm_network_security_group" "my_terraform_nsg" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
+  # SSH access - restrict to specific IP ranges in production
   security_rule {
     name                       = "SSH"
     priority                   = 1001
@@ -126,8 +135,41 @@ resource "azurerm_network_security_group" "my_terraform_nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
+    source_address_prefix      = var.allowed_ssh_cidr
+    destination_address_prefix = "*"
+  }
+
+  # HTTP access for web applications
+  security_rule {
+    name                       = "HTTP"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
+  }
+
+  # HTTPS access for web applications
+  security_rule {
+    name                       = "HTTPS"
+    priority                   = 1003
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
   }
 }
 
@@ -164,21 +206,15 @@ resource "azurerm_storage_account" "my_storage_account" {
   account_replication_type = "LRS"
 }
 
-variable "username" {
-  type        = string
-  description = "Admin username for the VM"
-  default     = "azureuser"
-}
-
 resource "azurerm_linux_virtual_machine" "my_terraform_vm" {
-  name                  = "myVM"
+  name                  = "${var.name_function}-vm"
   location              = azurerm_resource_group.rg.location
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.my_terraform_nic.id]
-  size                  = "Standard_B1s"
+  size                  = var.vm_size
 
   os_disk {
-    name                 = "myOsDisk"
+    name                 = "${var.name_function}-os-disk"
     caching              = "ReadWrite"
     storage_account_type = "Premium_LRS"
   }
@@ -190,16 +226,27 @@ resource "azurerm_linux_virtual_machine" "my_terraform_vm" {
     version   = "latest"
   }
 
-  computer_name  = "hostname"
-  admin_username = var.username
+  computer_name  = "${var.name_function}-vm"
+  admin_username = var.admin_username
 
   admin_ssh_key {
-    username   = var.username
+    username   = var.admin_username
     public_key = azapi_resource_action.ssh_public_key_gen.output.publicKey
   }
 
   boot_diagnostics {
     storage_account_uri = azurerm_storage_account.my_storage_account.primary_blob_endpoint
+  }
+
+  # Enable automatic updates
+  patch_mode = "AutomaticByPlatform"
+
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
+    Resource    = "Virtual Machine"
   }
 }
 

@@ -1,0 +1,100 @@
+name: 'Terraform CI/CD'
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/terraform.yml'
+
+env:
+  TF_VERSION: '1.6.0'
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+    
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # Install the latest version of Terraform CLI
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    # Configure the Azure CLI
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: |
+          {
+            "clientId": "${{ env.AZURE_CLIENT_ID }}",
+            "clientSecret": "${{ env.AZURE_CLIENT_SECRET }}",
+            "subscriptionId": "${{ env.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ env.AZURE_TENANT_ID }}"
+          }
+
+    # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+    - name: Terraform Init
+      run: terraform init
+
+    # Checks that all Terraform configuration files adhere to a canonical format
+    - name: Terraform Format
+      run: terraform fmt -check
+
+    # Validates the Terraform configuration files
+    - name: Terraform Validate
+      run: terraform validate
+
+    # Security scan with tfsec
+    - name: Security Scan
+      uses: aquasecurity/tfsec-action@v1.0.3
+      with:
+        working_directory: .
+
+    # Generates an execution plan for Terraform
+    - name: Terraform Plan
+      run: |
+        if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          terraform plan -var-file="prod.tfvars" -out=tfplan
+        else
+          terraform plan -var-file="dev.tfvars" -out=tfplan
+        fi
+
+    # Upload the plan as an artifact
+    - name: Upload Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan
+        path: tfplan
+
+    # Apply the Terraform plan only on main branch and if it's not a PR
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: terraform apply tfplan
+
+    # Clean up
+    - name: Cleanup
+      if: always()
+      run: rm -f tfplan
