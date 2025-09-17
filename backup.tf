@@ -94,7 +94,7 @@ resource "azurerm_snapshot" "vm_snapshot" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   create_option       = "Copy"
-  source_uri          = azurerm_linux_virtual_machine.my_terraform_vm.storage_os_disk[0].managed_disk_id
+  source_resource_id  = azurerm_managed_disk.data_disk[0].id
 
   tags = {
     Environment = var.environment
